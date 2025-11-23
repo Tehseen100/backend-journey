@@ -1,7 +1,7 @@
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ApiError } from '../utils/ApiError.js';
 import { User } from '../models/user.model.js';
-import { uploadOnCloudinary } from '../utils/cloudinary.js';
+import { deleteFromCloudinary, uploadOnCloudinary } from '../utils/cloudinary.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
@@ -64,8 +64,14 @@ const registerUser = asyncHandler(async (req, res) => {
 
     const user = await User.create({
         fullName,
-        avatar: avatar.url,
-        coverImage: coverImage?.url || "",
+        avatar: {
+            url: avatar?.secure_url,
+            public_id: avatar?.public_id
+        },
+        coverImage: coverImage ? {
+            url: coverImage?.secure_url,
+            public_id: coverImage?.public_id
+        } : undefined,
         username: username.toLowerCase(),
         email,
         password
@@ -117,7 +123,8 @@ const loginUser = asyncHandler(async (req, res) => {
             new ApiResponse(200,
                 {
                     user: loggedInUser,
-                    accessToken, refreshToken
+                    accessToken,
+                    refreshToken
                 },
                 "User logged In Successfully"
             )
@@ -129,9 +136,13 @@ const logoutUser = asyncHandler(async (req, res) => {
     await User.findByIdAndUpdate(
         req.user?._id,
         {
-            $set: { refreshToken: undefined }
+            $unset: {
+                refreshToken: 1
+            }
         },
-        { new: true }
+        {
+            new: true
+        }
     );
 
     return res
@@ -171,7 +182,10 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
             .json(
                 new ApiResponse(
                     200,
-                    { accessToken, refreshToken },
+                    {
+                        accessToken,
+                        refreshToken
+                    },
                     "Access token refreshed"
                 )
             )
@@ -238,18 +252,38 @@ const updateAccountDetails = asyncHandler(async (req, res) => {
 });
 
 const updateUserAvatar = asyncHandler(async (req, res) => {
-    const avatarLocalPath = req.file?.avatar;
+    const newAvatarLocalPath = req.file?.path;
 
-    if (!avatarLocalPath) {
+    if (!newAvatarLocalPath) {
         throw new ApiError(400, "Avatar file is missing");
     }
 
-    const avatar = await uploadOnCloudinary(avatarLocalPath);
+    const newAvatar = await uploadOnCloudinary(newAvatarLocalPath);
 
-    if (!avatar?.url) {
+    if (!newAvatar?.secure_url) {
         throw new ApiError(400, "Error while uploading avatar");
     }
 
+    const user = await User.findById(req.user?._id);
+
+    // Delete old avatar from cloudinary
+    if (user.avatar?.public_id) {
+        await deleteFromCloudinary(user.avatar.public_id);
+    }
+
+    // Update new avatar
+    user.avatar = {
+        url: newAvatar.secure_url,
+        public_id: newAvatar.public_id
+    }
+
+    await user.save();
+
+    const safeUser = user.toObject();
+    delete safeUser.password;
+    delete safeUser.refreshToken;
+
+    /*
     const user = await User.findByIdAndUpdate(
         req.user?._id,
         {
@@ -259,28 +293,49 @@ const updateUserAvatar = asyncHandler(async (req, res) => {
         },
         { new: true }
     ).select("-password -refreshToken");
+    */
 
     return res
         .status(200)
         .json(
-            new ApiResponse(200, user, "Avatar updated successfully")
+            new ApiResponse(200, safeUser, "Avatar updated successfully")
         )
 
 });
 
 const updateUserCoverImage = asyncHandler(async (req, res) => {
-    const coverImageLocalPath = req.file?.coverImage;
+    const newCoverImageLocalPath = req.file?.path;
 
-    if (!coverImageLocalPath) {
-        throw new ApiError(400, "Cover Image file is missing");
+    if (!newCoverImageLocalPath) {
+        throw new ApiError(400, "Cover image file is missing");
     }
 
-    const coverImage = await uploadOnCloudinary(avatarLocalPath);
+    const newCoverImage = await uploadOnCloudinary(newCoverImageLocalPath);
 
-    if (!coverImage?.url) {
+    if (!newCoverImage?.secure_url) {
         throw new ApiError(400, "Error while uploading cover image");
     }
 
+    const user = await User.findById(req.user?._id);
+
+    // Delete old cover image from cloudinary
+    if (user.coverImage?.public_id) {
+        await deleteFromCloudinary(user.coverImage.public_id);
+    }
+
+    // Update new Cover Image
+    user.coverImage = {
+        url: newCoverImage.secure_url,
+        public_id: newCoverImage.public_id
+    }
+
+    await user.save();
+
+    const safeUser = user.toObject();
+    delete safeUser.password;
+    delete safeUser.refreshToken;
+
+    /*
     const user = await User.findByIdAndUpdate(
         req.user?._id,
         {
@@ -290,11 +345,12 @@ const updateUserCoverImage = asyncHandler(async (req, res) => {
         },
         { new: true }
     ).select("-password -refreshToken");
+    */
 
     return res
         .status(200)
         .json(
-            new ApiResponse(200, user, "Cover image updated successfully")
+            new ApiResponse(200, safeUser, "Cover image updated successfully")
         )
 
 });
